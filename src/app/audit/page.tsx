@@ -1,12 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { runAudit } from "@/lib/audit-engine";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type PrimaryUseCase = "coding" | "writing" | "research" | "data" | "mixed";
+import type { AITool, AuditInput, UseCase } from "@/types/audit";
 
 type ToolName =
   | "Cursor"
@@ -29,11 +26,11 @@ interface ToolEntry {
 
 interface FormState {
   teamSize: string;
-  primaryUseCase: PrimaryUseCase | "";
+  primaryUseCase: UseCase | "";
   tools: ToolEntry[];
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "auditFormState";
 
 const ALL_TOOLS: ToolName[] = [
   "Cursor",
@@ -47,7 +44,19 @@ const ALL_TOOLS: ToolName[] = [
   "v0",
 ];
 
-const USE_CASES: { value: PrimaryUseCase; label: string; icon: string }[] = [
+const TOOL_MAP: Record<ToolName, AITool> = {
+  Cursor: "cursor",
+  "GitHub Copilot": "github_copilot",
+  Claude: "claude",
+  ChatGPT: "chatgpt",
+  "Anthropic API": "anthropic_api",
+  "OpenAI API": "openai_api",
+  Gemini: "gemini",
+  Windsurf: "windsurf",
+  v0: "v0",
+};
+
+const USE_CASES: { value: UseCase; label: string; icon: string }[] = [
   { value: "coding", label: "Coding", icon: "⌨️" },
   { value: "writing", label: "Writing", icon: "✍️" },
   { value: "research", label: "Research", icon: "🔬" },
@@ -56,15 +65,15 @@ const USE_CASES: { value: PrimaryUseCase; label: string; icon: string }[] = [
 ];
 
 const TOOL_PLANS: Record<ToolName, string[]> = {
-  Cursor: ["Free", "Pro", "Business", "Custom"],
-  "GitHub Copilot": ["Individual", "Business", "Enterprise"],
-  Claude: ["Free", "Pro", "Team", "Enterprise"],
-  ChatGPT: ["Free", "Plus", "Team", "Enterprise"],
-  "Anthropic API": ["Pay-as-you-go", "Committed Use"],
-  "OpenAI API": ["Pay-as-you-go", "Committed Use"],
-  Gemini: ["Free", "Advanced", "Business", "Enterprise"],
-  Windsurf: ["Free", "Pro", "Teams", "Enterprise"],
-  v0: ["Free", "Premium", "Team"],
+  Cursor: ["free", "pro", "business", "enterprise"],
+  "GitHub Copilot": ["individual", "business", "enterprise"],
+  Claude: ["free", "pro", "team", "enterprise"],
+  ChatGPT: ["free", "plus", "team", "enterprise"],
+  "Anthropic API": ["pay_as_you_go", "committed_use"],
+  "OpenAI API": ["pay_as_you_go", "committed_use"],
+  Gemini: ["free", "pro", "ultra", "api"],
+  Windsurf: ["free", "pro", "teams", "enterprise"],
+  v0: ["free", "premium", "team"],
 };
 
 const TOOL_COLORS: Record<ToolName, string> = {
@@ -79,11 +88,7 @@ const TOOL_COLORS: Record<ToolName, string> = {
   v0: "#ffffff",
 };
 
-const STORAGE_KEY = "auditFormState";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function generateId(): string {
+function generateId() {
   return Math.random().toString(36).slice(2, 9);
 }
 
@@ -97,282 +102,17 @@ function createToolEntry(name: ToolName): ToolEntry {
   };
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function StepIndicator({
-  currentStep,
-  totalSteps,
-}: {
-  currentStep: number;
-  totalSteps: number;
-}) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-      {Array.from({ length: totalSteps }, (_, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <div
-            style={{
-              width: i < currentStep ? "28px" : i === currentStep ? "28px" : "28px",
-              height: "28px",
-              borderRadius: "50%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: "12px",
-              fontWeight: "700",
-              fontFamily: "'DM Mono', monospace",
-              transition: "all 0.3s ease",
-              background:
-                i < currentStep
-                  ? "linear-gradient(135deg, #6EE7B7, #3B82F6)"
-                  : i === currentStep
-                  ? "rgba(110, 231, 183, 0.15)"
-                  : "rgba(255,255,255,0.04)",
-              border:
-                i < currentStep
-                  ? "none"
-                  : i === currentStep
-                  ? "1.5px solid #6EE7B7"
-                  : "1.5px solid rgba(255,255,255,0.1)",
-              color:
-                i < currentStep ? "#000" : i === currentStep ? "#6EE7B7" : "rgba(255,255,255,0.3)",
-            }}
-          >
-            {i < currentStep ? "✓" : i + 1}
-          </div>
-          {i < totalSteps - 1 && (
-            <div
-              style={{
-                width: "40px",
-                height: "1px",
-                background:
-                  i < currentStep - 1
-                    ? "linear-gradient(90deg, #6EE7B7, #3B82F6)"
-                    : "rgba(255,255,255,0.08)",
-                transition: "background 0.3s ease",
-              }}
-            />
-          )}
-        </div>
-      ))}
-    </div>
-  );
+function formatPlan(plan: string) {
+  return plan
+    .split("_")
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" ");
 }
-
-function ToolCard({
-  tool,
-  onUpdate,
-  onRemove,
-}: {
-  tool: ToolEntry;
-  onUpdate: (field: keyof ToolEntry, value: string) => void;
-  onRemove: () => void;
-}) {
-  const accentColor = TOOL_COLORS[tool.name];
-  const plans = TOOL_PLANS[tool.name];
-
-  return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.03)",
-        border: "1px solid rgba(255,255,255,0.07)",
-        borderRadius: "16px",
-        padding: "20px",
-        position: "relative",
-        transition: "border-color 0.2s ease",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.borderColor = `${accentColor}40`;
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(255,255,255,0.07)";
-      }}
-    >
-      {/* Tool header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "16px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: accentColor,
-              boxShadow: `0 0 8px ${accentColor}80`,
-            }}
-          />
-          <span
-            style={{
-              fontSize: "14px",
-              fontWeight: "600",
-              color: "#fff",
-              fontFamily: "'DM Sans', sans-serif",
-            }}
-          >
-            {tool.name}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={onRemove}
-          style={{
-            background: "rgba(239,68,68,0.08)",
-            border: "1px solid rgba(239,68,68,0.2)",
-            borderRadius: "8px",
-            padding: "4px 10px",
-            color: "rgba(239,68,68,0.7)",
-            fontSize: "11px",
-            cursor: "pointer",
-            fontFamily: "'DM Mono', monospace",
-            transition: "all 0.2s",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.15)";
-            (e.currentTarget as HTMLButtonElement).style.color = "#EF4444";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)";
-            (e.currentTarget as HTMLButtonElement).style.color = "rgba(239,68,68,0.7)";
-          }}
-        >
-          remove
-        </button>
-      </div>
-
-      {/* Fields */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: "12px",
-        }}
-      >
-        {/* Plan */}
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "10px",
-              fontFamily: "'DM Mono', monospace",
-              color: "rgba(255,255,255,0.35)",
-              marginBottom: "6px",
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-            }}
-          >
-            Plan
-          </label>
-          <select
-            value={tool.plan}
-            onChange={(e) => onUpdate("plan", e.target.value)}
-            style={{
-              width: "100%",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: "8px",
-              padding: "8px 10px",
-              color: "#fff",
-              fontSize: "13px",
-              fontFamily: "'DM Sans', sans-serif",
-              outline: "none",
-              cursor: "pointer",
-            }}
-          >
-            {plans.map((p) => (
-              <option key={p} value={p} style={{ background: "#141414" }}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Monthly Spend */}
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "10px",
-              fontFamily: "'DM Mono', monospace",
-              color: "rgba(255,255,255,0.35)",
-              marginBottom: "6px",
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-            }}
-          >
-            Monthly ($)
-          </label>
-          <input
-            type="number"
-            min="0"
-            placeholder="0"
-            value={tool.monthlySpend}
-            onChange={(e) => onUpdate("monthlySpend", e.target.value)}
-            style={{
-              width: "100%",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: "8px",
-              padding: "8px 10px",
-              color: "#fff",
-              fontSize: "13px",
-              fontFamily: "'DM Mono', monospace",
-              outline: "none",
-              boxSizing: "border-box",
-            }}
-          />
-        </div>
-
-        {/* Seats */}
-        <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "10px",
-              fontFamily: "'DM Mono', monospace",
-              color: "rgba(255,255,255,0.35)",
-              marginBottom: "6px",
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-            }}
-          >
-            Seats
-          </label>
-          <input
-            type="number"
-            min="1"
-            placeholder="1"
-            value={tool.seats}
-            onChange={(e) => onUpdate("seats", e.target.value)}
-            style={{
-              width: "100%",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: "8px",
-              padding: "8px 10px",
-              color: "#fff",
-              fontSize: "13px",
-              fontFamily: "'DM Mono', monospace",
-              outline: "none",
-              boxSizing: "border-box",
-            }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AuditPage() {
   const router = useRouter();
-  const [step, setStep] = useState(0); // 0 = basics, 1 = tools, 2 = review
+
+  const [step, setStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showToolPicker, setShowToolPicker] = useState(false);
@@ -383,126 +123,214 @@ export default function AuditPage() {
     tools: [],
   });
 
-  // ── Load from localStorage ──
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as FormState;
-        setForm(parsed);
-      }
-    } catch {
-      // ignore
-    }
+      if (saved) setForm(JSON.parse(saved) as FormState);
+    } catch {}
   }, []);
 
-  // ── Persist to localStorage ──
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(form));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [form]);
 
-  // ── Validation ──
-  function validateStep(s: number): Record<string, string> {
-    const errs: Record<string, string> = {};
-    if (s === 0) {
-      if (!form.teamSize || parseInt(form.teamSize) < 1) {
-        errs.teamSize = "Please enter a valid team size.";
+  function validateStep(currentStep: number) {
+    const nextErrors: Record<string, string> = {};
+
+    if (currentStep === 0) {
+      if (!form.teamSize || Number(form.teamSize) < 1) {
+        nextErrors.teamSize = "Please enter a valid team size.";
       }
+
       if (!form.primaryUseCase) {
-        errs.primaryUseCase = "Please select a primary use case.";
+        nextErrors.primaryUseCase = "Please select a primary use case.";
       }
     }
-    if (s === 1) {
+
+    if (currentStep === 1) {
       if (form.tools.length === 0) {
-        errs.tools = "Add at least one AI tool.";
+        nextErrors.tools = "Add at least one AI tool.";
       }
-      form.tools.forEach((t) => {
-        if (!t.monthlySpend || parseFloat(t.monthlySpend) < 0) {
-          errs[`spend_${t.id}`] = `Enter monthly spend for ${t.name}.`;
+
+      form.tools.forEach((tool) => {
+        if (!tool.monthlySpend || Number(tool.monthlySpend) < 0) {
+          nextErrors[`spend_${tool.id}`] = `Enter monthly spend for ${tool.name}.`;
         }
-        if (!t.seats || parseInt(t.seats) < 1) {
-          errs[`seats_${t.id}`] = `Enter seats for ${t.name}.`;
+
+        if (!tool.seats || Number(tool.seats) < 1) {
+          nextErrors[`seats_${tool.id}`] = `Enter seats for ${tool.name}.`;
         }
       });
     }
-    return errs;
+
+    return nextErrors;
   }
 
   function handleNext() {
-    const errs = validateStep(step);
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
+    const nextErrors = validateStep(step);
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
+
     setErrors({});
-    setStep((s) => s + 1);
+    setStep((value) => value + 1);
   }
 
   function handleBack() {
     setErrors({});
-    setStep((s) => s - 1);
+    setStep((value) => value - 1);
   }
 
-  // ── Tool management ──
   function addTool(name: ToolName) {
-    if (form.tools.find((t) => t.name === name)) return;
-    setForm((f) => ({ ...f, tools: [...f.tools, createToolEntry(name)] }));
+    if (form.tools.some((tool) => tool.name === name)) return;
+
+    setForm((current) => ({
+      ...current,
+      tools: [...current.tools, createToolEntry(name)],
+    }));
+
     setShowToolPicker(false);
   }
 
   function removeTool(id: string) {
-    setForm((f) => ({ ...f, tools: f.tools.filter((t) => t.id !== id) }));
-  }
-
-  function updateTool(id: string, field: keyof ToolEntry, value: string) {
-    setForm((f) => ({
-      ...f,
-      tools: f.tools.map((t) => (t.id === id ? { ...t, [field]: value } : t)),
+    setForm((current) => ({
+      ...current,
+      tools: current.tools.filter((tool) => tool.id !== id),
     }));
   }
 
-  // ── Submit ──
-  async function handleSubmit() {
-    const errs = validateStep(1);
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
+  function updateTool(id: string, field: keyof ToolEntry, value: string) {
+    setForm((current) => ({
+      ...current,
+      tools: current.tools.map((tool) =>
+        tool.id === id ? { ...tool, [field]: value } : tool
+      ),
+    }));
+  }
+
+  function handleSubmit() {
+    const nextErrors = validateStep(1);
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
+
+    if (!form.primaryUseCase) {
+      setErrors({ primaryUseCase: "Please select a primary use case." });
+      return;
+    }
+
     setIsSubmitting(true);
+
     try {
-      const auditInput = {
-        teamSize: parseInt(form.teamSize),
-        primaryUseCase: form.primaryUseCase,
-        tools: form.tools.map((t) => ({
-          name: t.name,
-          plan: t.plan,
-          monthlySpend: parseFloat(t.monthlySpend) || 0,
-          seats: parseInt(t.seats) || 1,
+      const auditInput: AuditInput = {
+        teamSize: Number(form.teamSize),
+        useCase: form.primaryUseCase,
+        tools: form.tools.map((tool) => ({
+          tool: TOOL_MAP[tool.name],
+          plan: tool.plan,
+          monthlySpend: Number(tool.monthlySpend) || 0,
+          seats: Number(tool.seats) || 1,
         })),
       };
-      const result = await runAudit(auditInput);
-      localStorage.setItem("latestAuditResult", JSON.stringify(result));
+
+      const rawResult = runAudit(auditInput);
+
+      const resultForDashboard = {
+        ...rawResult,
+        optimizedSpend: rawResult.optimizedMonthlySpend,
+        overallScore: Math.round(
+          (rawResult.scoreBreakdown.efficiency +
+            rawResult.scoreBreakdown.coverage +
+            rawResult.scoreBreakdown.overlap +
+            rawResult.scoreBreakdown.planFit) /
+            4
+        ),
+        confidenceScore:
+          rawResult.recommendations.length > 0
+            ? Math.round(
+                rawResult.recommendations.reduce(
+                  (sum, rec) => sum + rec.confidence,
+                  0
+                ) / rawResult.recommendations.length
+              )
+            : 90,
+        aiSummary: rawResult.aiSummary || rawResult.summary,
+        auditedAt: rawResult.createdAt,
+        scoreBreakdown: [
+          {
+            label: "Efficiency",
+            score: rawResult.scoreBreakdown.efficiency,
+            maxScore: 100,
+            icon: "⚡",
+          },
+          {
+            label: "Coverage",
+            score: rawResult.scoreBreakdown.coverage,
+            maxScore: 100,
+            icon: "🧩",
+          },
+          {
+            label: "Overlap",
+            score: rawResult.scoreBreakdown.overlap,
+            maxScore: 100,
+            icon: "🔁",
+          },
+          {
+            label: "Plan Fit",
+            score: rawResult.scoreBreakdown.planFit,
+            maxScore: 100,
+            icon: "🎯",
+          },
+        ],
+        recommendations: rawResult.recommendations.map((rec) => ({
+          id: rec.id,
+          title: rec.title,
+          description: rec.description,
+          severity:
+            rec.severity === "critical"
+              ? "critical"
+              : rec.severity === "warning"
+              ? "high"
+              : rec.severity === "info"
+              ? "medium"
+              : "low",
+          category: rec.tool.replace("_", " "),
+          monthlySavings: rec.monthlySavings,
+          confidence: rec.confidence,
+          effort:
+            rec.monthlySavings >= 500
+              ? "high"
+              : rec.monthlySavings >= 100
+              ? "medium"
+              : "low",
+          tags: [rec.action],
+        })),
+      };
+
+      localStorage.setItem("latestAuditResult", JSON.stringify(resultForDashboard));
       localStorage.removeItem(STORAGE_KEY);
       router.push("/results");
-    } catch (err) {
-      console.error("Audit failed:", err);
+    } catch (error) {
+      console.error("Audit failed:", error);
       setErrors({ submit: "Something went wrong. Please try again." });
       setIsSubmitting(false);
     }
   }
 
   const totalMonthly = form.tools.reduce(
-    (sum, t) => sum + (parseFloat(t.monthlySpend) || 0),
+    (sum, tool) => sum + (Number(tool.monthlySpend) || 0),
     0
   );
-  const addedToolNames = new Set(form.tools.map((t) => t.name));
 
-  // ── Shared input style ──
-  const inputStyle: React.CSSProperties = {
+  const addedToolNames = new Set(form.tools.map((tool) => tool.name));
+
+  const inputStyle: CSSProperties = {
     width: "100%",
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.1)",
@@ -510,82 +338,66 @@ export default function AuditPage() {
     padding: "14px 16px",
     color: "#fff",
     fontSize: "15px",
-    fontFamily: "'DM Sans', sans-serif",
     outline: "none",
     boxSizing: "border-box",
-    transition: "border-color 0.2s ease",
   };
 
-  const labelStyle: React.CSSProperties = {
+  const labelStyle: CSSProperties = {
     display: "block",
     fontSize: "11px",
-    fontFamily: "'DM Mono', monospace",
     color: "rgba(255,255,255,0.4)",
     marginBottom: "8px",
     letterSpacing: "0.1em",
     textTransform: "uppercase",
   };
 
-  const errorStyle: React.CSSProperties = {
+  const errorStyle: CSSProperties = {
     fontSize: "12px",
     color: "#F87171",
     marginTop: "6px",
-    fontFamily: "'DM Mono', monospace",
   };
 
   return (
     <>
-      {/* Google Fonts */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600;700&family=Syne:wght@600;700;800&display=swap');
-
-        * { box-sizing: border-box; }
-
         body {
           background: #0A0A0A;
           margin: 0;
         }
 
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button {
-          opacity: 0.3;
+        * {
+          box-sizing: border-box;
         }
 
-        input:focus, select:focus {
+        input:focus,
+        select:focus {
           border-color: rgba(110,231,183,0.4) !important;
           box-shadow: 0 0 0 3px rgba(110,231,183,0.06);
         }
 
-        .tool-picker-btn:hover {
-          background: rgba(110,231,183,0.08) !important;
-          border-color: rgba(110,231,183,0.3) !important;
-          color: #6EE7B7 !important;
+        @keyframes spin {
+          to { transform: rotate(360deg); }
         }
 
-        .next-btn:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: 0 8px 30px rgba(110,231,183,0.25);
-        }
-
-        .next-btn:active:not(:disabled) {
-          transform: translateY(0);
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
         }
       `}</style>
 
-      <div
+      <main
         style={{
           minHeight: "100vh",
-          background: "#0A0A0A",
-          backgroundImage:
-            "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(16,185,129,0.06) 0%, transparent 60%)",
+          background:
+            "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(16,185,129,0.08), transparent 60%), #0A0A0A",
+          color: "#fff",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           padding: "40px 16px 80px",
-          fontFamily: "'DM Sans', sans-serif",
+          fontFamily: "Inter, Arial, sans-serif",
         }}
       >
-        {/* Back to home */}
         <div style={{ width: "100%", maxWidth: "680px", marginBottom: "32px" }}>
           <button
             type="button"
@@ -593,170 +405,148 @@ export default function AuditPage() {
             style={{
               background: "none",
               border: "none",
-              color: "rgba(255,255,255,0.35)",
-              fontSize: "13px",
-              fontFamily: "'DM Mono', monospace",
+              color: "rgba(255,255,255,0.45)",
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "0",
-              transition: "color 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.7)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.35)";
+              fontSize: "14px",
             }}
           >
             ← home
           </button>
         </div>
 
-        {/* Header */}
-        <div
-          style={{
-            width: "100%",
-            maxWidth: "680px",
-            marginBottom: "40px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-          }}
-        >
+        <section style={{ width: "100%", maxWidth: "680px", marginBottom: "32px" }}>
           <div
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: "8px",
+              border: "1px solid rgba(110,231,183,0.18)",
               background: "rgba(110,231,183,0.06)",
-              border: "1px solid rgba(110,231,183,0.15)",
-              borderRadius: "100px",
-              padding: "5px 14px",
-              width: "fit-content",
+              padding: "6px 14px",
+              borderRadius: "999px",
+              marginBottom: "16px",
             }}
           >
-            <div
+            <span
               style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
+                width: "7px",
+                height: "7px",
+                borderRadius: "999px",
                 background: "#6EE7B7",
                 animation: "pulse 2s infinite",
               }}
             />
-            <span
-              style={{
-                fontSize: "11px",
-                color: "#6EE7B7",
-                fontFamily: "'DM Mono', monospace",
-                letterSpacing: "0.08em",
-              }}
-            >
+            <span style={{ fontSize: "12px", color: "#6EE7B7" }}>
               AI SPEND AUDIT
             </span>
           </div>
 
           <h1
             style={{
-              fontFamily: "'Syne', sans-serif",
-              fontSize: "clamp(28px, 5vw, 40px)",
-              fontWeight: "800",
-              color: "#fff",
-              margin: "0",
-              letterSpacing: "-0.02em",
-              lineHeight: "1.15",
+              fontSize: "clamp(32px, 5vw, 46px)",
+              lineHeight: 1.1,
+              margin: "0 0 12px",
+              letterSpacing: "-0.04em",
             }}
           >
             Audit your AI stack.
             <br />
             <span
               style={{
-                background: "linear-gradient(135deg, #6EE7B7 0%, #3B82F6 100%)",
+                background: "linear-gradient(135deg, #6EE7B7, #3B82F6)",
                 WebkitBackgroundClip: "text",
                 WebkitTextFillColor: "transparent",
               }}
             >
-              Cut what doesn't work.
+              Cut what doesn&apos;t work.
             </span>
           </h1>
 
-          <p
-            style={{
-              fontSize: "15px",
-              color: "rgba(255,255,255,0.45)",
-              margin: "0",
-              lineHeight: "1.6",
-            }}
-          >
-            Answer a few questions about your team's AI usage and we'll surface
-            waste, gaps, and smarter alternatives — in seconds.
+          <p style={{ color: "rgba(255,255,255,0.55)", lineHeight: 1.7 }}>
+            Answer a few questions about your team&apos;s AI usage and we&apos;ll
+            surface waste, overlaps, and smarter savings opportunities.
           </p>
-        </div>
+        </section>
 
-        {/* Step indicator */}
-        <div
+        <section
           style={{
             width: "100%",
             maxWidth: "680px",
-            marginBottom: "32px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            marginBottom: "24px",
           }}
         >
-          <StepIndicator currentStep={step} totalSteps={3} />
-          <span
-            style={{
-              fontSize: "11px",
-              fontFamily: "'DM Mono', monospace",
-              color: "rgba(255,255,255,0.25)",
-            }}
-          >
-            {step === 0 ? "basics" : step === 1 ? "your tools" : "review"}
-          </span>
-        </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            {[0, 1, 2].map((item) => (
+              <div key={item} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{
+                    width: "28px",
+                    height: "28px",
+                    borderRadius: "999px",
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    background:
+                      item < step
+                        ? "linear-gradient(135deg, #6EE7B7, #3B82F6)"
+                        : item === step
+                        ? "rgba(110,231,183,0.12)"
+                        : "rgba(255,255,255,0.04)",
+                    color: item < step ? "#000" : item === step ? "#6EE7B7" : "#777",
+                    border:
+                      item === step
+                        ? "1px solid rgba(110,231,183,0.35)"
+                        : "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  {item < step ? "✓" : item + 1}
+                </div>
+                {item < 2 && (
+                  <div
+                    style={{
+                      width: "40px",
+                      height: "1px",
+                      background:
+                        item < step
+                          ? "linear-gradient(90deg, #6EE7B7, #3B82F6)"
+                          : "rgba(255,255,255,0.08)",
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
 
-        {/* Card */}
-        <div
+          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "12px" }}>
+            {step === 0 ? "basics" : step === 1 ? "tools" : "review"}
+          </span>
+        </section>
+
+        <section
           style={{
             width: "100%",
             maxWidth: "680px",
-            background: "rgba(255,255,255,0.025)",
-            border: "1px solid rgba(255,255,255,0.07)",
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: "24px",
-            padding: "36px",
+            padding: "32px",
           }}
         >
-          {/* ─── STEP 0: Basics ───────────────────────────────────────────── */}
           {step === 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
               <div>
-                <h2
-                  style={{
-                    fontFamily: "'Syne', sans-serif",
-                    fontSize: "20px",
-                    fontWeight: "700",
-                    color: "#fff",
-                    margin: "0 0 4px",
-                  }}
-                >
+                <h2 style={{ margin: "0 0 6px", fontSize: "22px" }}>
                   About your team
                 </h2>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: "rgba(255,255,255,0.35)",
-                    margin: "0",
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
+                <p style={{ margin: 0, color: "rgba(255,255,255,0.4)" }}>
                   Step 1 of 3
                 </p>
               </div>
 
-              {/* Team size */}
               <div>
                 <label style={labelStyle}>Team size</label>
                 <input
@@ -764,81 +554,56 @@ export default function AuditPage() {
                   min="1"
                   placeholder="e.g. 12"
                   value={form.teamSize}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, teamSize: e.target.value }))
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      teamSize: event.target.value,
+                    }))
                   }
                   style={inputStyle}
                 />
-                {errors.teamSize && (
-                  <p style={errorStyle}>{errors.teamSize}</p>
-                )}
+                {errors.teamSize && <p style={errorStyle}>{errors.teamSize}</p>}
               </div>
 
-              {/* Primary use case */}
               <div>
                 <label style={labelStyle}>Primary use case</label>
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(3, 1fr)",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
                     gap: "10px",
                   }}
                 >
-                  {USE_CASES.map((uc) => {
-                    const isSelected = form.primaryUseCase === uc.value;
+                  {USE_CASES.map((item) => {
+                    const active = form.primaryUseCase === item.value;
+
                     return (
                       <button
-                        key={uc.value}
+                        key={item.value}
                         type="button"
                         onClick={() =>
-                          setForm((f) => ({ ...f, primaryUseCase: uc.value }))
+                          setForm((current) => ({
+                            ...current,
+                            primaryUseCase: item.value,
+                          }))
                         }
                         style={{
-                          background: isSelected
+                          background: active
                             ? "rgba(110,231,183,0.1)"
-                            : "rgba(255,255,255,0.03)",
-                          border: isSelected
-                            ? "1.5px solid rgba(110,231,183,0.4)"
-                            : "1.5px solid rgba(255,255,255,0.07)",
-                          borderRadius: "12px",
-                          padding: "14px 12px",
+                            : "rgba(255,255,255,0.04)",
+                          border: active
+                            ? "1px solid rgba(110,231,183,0.45)"
+                            : "1px solid rgba(255,255,255,0.08)",
+                          borderRadius: "14px",
+                          padding: "14px",
+                          color: active ? "#6EE7B7" : "rgba(255,255,255,0.68)",
                           cursor: "pointer",
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          gap: "8px",
-                          transition: "all 0.2s ease",
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!isSelected) {
-                            (e.currentTarget as HTMLButtonElement).style.borderColor =
-                              "rgba(255,255,255,0.15)";
-                            (e.currentTarget as HTMLButtonElement).style.background =
-                              "rgba(255,255,255,0.05)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!isSelected) {
-                            (e.currentTarget as HTMLButtonElement).style.borderColor =
-                              "rgba(255,255,255,0.07)";
-                            (e.currentTarget as HTMLButtonElement).style.background =
-                              "rgba(255,255,255,0.03)";
-                          }
                         }}
                       >
-                        <span style={{ fontSize: "22px" }}>{uc.icon}</span>
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            color: isSelected
-                              ? "#6EE7B7"
-                              : "rgba(255,255,255,0.6)",
-                            fontFamily: "'DM Sans', sans-serif",
-                            fontWeight: "500",
-                          }}
-                        >
-                          {uc.label}
-                        </span>
+                        <div style={{ fontSize: "22px", marginBottom: "8px" }}>
+                          {item.icon}
+                        </div>
+                        <div>{item.label}</div>
                       </button>
                     );
                   })}
@@ -850,507 +615,325 @@ export default function AuditPage() {
             </div>
           )}
 
-          {/* ─── STEP 1: Tools ────────────────────────────────────────────── */}
           {step === 1 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "22px" }}>
               <div>
-                <h2
-                  style={{
-                    fontFamily: "'Syne', sans-serif",
-                    fontSize: "20px",
-                    fontWeight: "700",
-                    color: "#fff",
-                    margin: "0 0 4px",
-                  }}
-                >
+                <h2 style={{ margin: "0 0 6px", fontSize: "22px" }}>
                   Your AI tools
                 </h2>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: "rgba(255,255,255,0.35)",
-                    margin: "0",
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
-                  Step 2 of 3 — add every tool your team pays for
+                <p style={{ margin: 0, color: "rgba(255,255,255,0.4)" }}>
+                  Add every AI tool your team pays for.
                 </p>
               </div>
 
-              {/* Tool cards */}
-              {form.tools.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  {form.tools.map((tool) => (
-                    <ToolCard
-                      key={tool.id}
-                      tool={tool}
-                      onUpdate={(field, value) =>
-                        updateTool(tool.id, field, value)
-                      }
-                      onRemove={() => removeTool(tool.id)}
-                    />
-                  ))}
-                </div>
-              )}
+              {form.tools.map((tool) => (
+                <div
+                  key={tool.id}
+                  style={{
+                    background: "rgba(255,255,255,0.035)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "16px",
+                    padding: "18px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "14px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span
+                        style={{
+                          width: "9px",
+                          height: "9px",
+                          borderRadius: "999px",
+                          background: TOOL_COLORS[tool.name],
+                        }}
+                      />
+                      <strong>{tool.name}</strong>
+                    </div>
 
-              {/* Per-tool errors */}
-              {form.tools.map((t) => (
-                <div key={t.id}>
-                  {errors[`spend_${t.id}`] && (
-                    <p style={errorStyle}>{errors[`spend_${t.id}`]}</p>
+                    <button
+                      type="button"
+                      onClick={() => removeTool(tool.id)}
+                      style={{
+                        background: "rgba(239,68,68,0.1)",
+                        border: "1px solid rgba(239,68,68,0.25)",
+                        color: "#F87171",
+                        borderRadius: "8px",
+                        padding: "5px 10px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      remove
+                    </button>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                      gap: "12px",
+                    }}
+                  >
+                    <div>
+                      <label style={labelStyle}>Plan</label>
+                      <select
+                        value={tool.plan}
+                        onChange={(event) =>
+                          updateTool(tool.id, "plan", event.target.value)
+                        }
+                        style={inputStyle}
+                      >
+                        {TOOL_PLANS[tool.name].map((plan) => (
+                          <option key={plan} value={plan} style={{ background: "#111" }}>
+                            {formatPlan(plan)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={labelStyle}>Monthly spend</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={tool.monthlySpend}
+                        placeholder="0"
+                        onChange={(event) =>
+                          updateTool(tool.id, "monthlySpend", event.target.value)
+                        }
+                        style={inputStyle}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={labelStyle}>Seats</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={tool.seats}
+                        placeholder="1"
+                        onChange={(event) =>
+                          updateTool(tool.id, "seats", event.target.value)
+                        }
+                        style={inputStyle}
+                      />
+                    </div>
+                  </div>
+
+                  {errors[`spend_${tool.id}`] && (
+                    <p style={errorStyle}>{errors[`spend_${tool.id}`]}</p>
                   )}
-                  {errors[`seats_${t.id}`] && (
-                    <p style={errorStyle}>{errors[`seats_${t.id}`]}</p>
+                  {errors[`seats_${tool.id}`] && (
+                    <p style={errorStyle}>{errors[`seats_${tool.id}`]}</p>
                   )}
                 </div>
               ))}
 
-              {/* Add tool button */}
               <div style={{ position: "relative" }}>
                 <button
                   type="button"
-                  onClick={() => setShowToolPicker((v) => !v)}
+                  onClick={() => setShowToolPicker((value) => !value)}
                   style={{
                     width: "100%",
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px dashed rgba(255,255,255,0.12)",
-                    borderRadius: "12px",
+                    background: "rgba(255,255,255,0.035)",
+                    border: "1px dashed rgba(255,255,255,0.18)",
+                    borderRadius: "14px",
+                    color: "rgba(255,255,255,0.65)",
                     padding: "14px",
-                    color: "rgba(255,255,255,0.45)",
-                    fontSize: "13px",
-                    fontFamily: "'DM Mono', monospace",
                     cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "8px",
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor =
-                      "rgba(110,231,183,0.3)";
-                    (e.currentTarget as HTMLButtonElement).style.color = "#6EE7B7";
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "rgba(110,231,183,0.04)";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor =
-                      "rgba(255,255,255,0.12)";
-                    (e.currentTarget as HTMLButtonElement).style.color =
-                      "rgba(255,255,255,0.45)";
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "rgba(255,255,255,0.03)";
                   }}
                 >
-                  <span style={{ fontSize: "16px" }}>+</span>
-                  Add AI tool
+                  + Add AI tool
                 </button>
 
-                {/* Tool picker dropdown */}
                 {showToolPicker && (
                   <div
                     style={{
-                      position: "absolute",
-                      top: "calc(100% + 8px)",
-                      left: "0",
-                      right: "0",
-                      background: "#141414",
+                      marginTop: "10px",
+                      background: "#111",
                       border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: "14px",
-                      padding: "8px",
-                      zIndex: 50,
-                      boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+                      padding: "10px",
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                      gap: "8px",
                     }}
                   >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(3, 1fr)",
-                        gap: "6px",
-                      }}
-                    >
-                      {ALL_TOOLS.map((name) => {
-                        const isAdded = addedToolNames.has(name);
-                        return (
-                          <button
-                            key={name}
-                            type="button"
-                            className="tool-picker-btn"
-                            disabled={isAdded}
-                            onClick={() => addTool(name)}
-                            style={{
-                              background: isAdded
-                                ? "rgba(255,255,255,0.02)"
-                                : "rgba(255,255,255,0.04)",
-                              border: "1px solid rgba(255,255,255,0.07)",
-                              borderRadius: "9px",
-                              padding: "10px 8px",
-                              color: isAdded
-                                ? "rgba(255,255,255,0.2)"
-                                : "rgba(255,255,255,0.7)",
-                              fontSize: "12px",
-                              fontFamily: "'DM Sans', sans-serif",
-                              cursor: isAdded ? "not-allowed" : "pointer",
-                              textAlign: "center",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              gap: "6px",
-                              transition: "all 0.15s",
-                            }}
-                          >
-                            {isAdded && (
-                              <span style={{ color: "#6EE7B7", fontSize: "10px" }}>
-                                ✓
-                              </span>
-                            )}
-                            {name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowToolPicker(false)}
-                      style={{
-                        width: "100%",
-                        marginTop: "8px",
-                        background: "none",
-                        border: "none",
-                        color: "rgba(255,255,255,0.25)",
-                        fontSize: "11px",
-                        fontFamily: "'DM Mono', monospace",
-                        cursor: "pointer",
-                        padding: "6px",
-                      }}
-                    >
-                      close
-                    </button>
+                    {ALL_TOOLS.map((name) => {
+                      const added = addedToolNames.has(name);
+
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          disabled={added}
+                          onClick={() => addTool(name)}
+                          style={{
+                            padding: "10px",
+                            borderRadius: "10px",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            background: added
+                              ? "rgba(255,255,255,0.02)"
+                              : "rgba(255,255,255,0.05)",
+                            color: added ? "rgba(255,255,255,0.25)" : "#fff",
+                            cursor: added ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {added ? "✓ " : ""}
+                          {name}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
 
               {errors.tools && <p style={errorStyle}>{errors.tools}</p>}
 
-              {/* Running total */}
               {form.tools.length > 0 && (
                 <div
                   style={{
-                    background: "rgba(110,231,183,0.04)",
-                    border: "1px solid rgba(110,231,183,0.1)",
-                    borderRadius: "12px",
-                    padding: "14px 16px",
+                    background: "rgba(110,231,183,0.06)",
+                    border: "1px solid rgba(110,231,183,0.15)",
+                    borderRadius: "14px",
+                    padding: "16px",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      fontFamily: "'DM Mono', monospace",
-                      color: "rgba(255,255,255,0.4)",
-                    }}
-                  >
-                    TOTAL MONTHLY SPEND
+                  <span style={{ color: "rgba(255,255,255,0.55)" }}>
+                    Total monthly spend
                   </span>
-                  <span
-                    style={{
-                      fontSize: "20px",
-                      fontFamily: "'DM Mono', monospace",
-                      fontWeight: "500",
-                      color: "#6EE7B7",
-                    }}
-                  >
-                    ${totalMonthly.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
+                  <strong style={{ color: "#6EE7B7", fontSize: "22px" }}>
+                    ${totalMonthly.toFixed(2)}
+                  </strong>
                 </div>
               )}
             </div>
           )}
 
-          {/* ─── STEP 2: Review ───────────────────────────────────────────── */}
           {step === 2 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "22px" }}>
               <div>
-                <h2
-                  style={{
-                    fontFamily: "'Syne', sans-serif",
-                    fontSize: "20px",
-                    fontWeight: "700",
-                    color: "#fff",
-                    margin: "0 0 4px",
-                  }}
-                >
+                <h2 style={{ margin: "0 0 6px", fontSize: "22px" }}>
                   Review & run audit
                 </h2>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: "rgba(255,255,255,0.35)",
-                    margin: "0",
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
-                  Step 3 of 3 — confirm your details
+                <p style={{ margin: 0, color: "rgba(255,255,255,0.4)" }}>
+                  Confirm your details before running the audit.
                 </p>
               </div>
 
-              {/* Summary grid */}
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                   gap: "12px",
                 }}
               >
                 <div
                   style={{
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.07)",
-                    borderRadius: "12px",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "14px",
                     padding: "16px",
                   }}
                 >
-                  <p
-                    style={{
-                      margin: "0 0 6px",
-                      fontSize: "10px",
-                      fontFamily: "'DM Mono', monospace",
-                      color: "rgba(255,255,255,0.35)",
-                      letterSpacing: "0.1em",
-                      textTransform: "uppercase",
-                    }}
-                  >
+                  <p style={{ color: "rgba(255,255,255,0.4)", margin: "0 0 6px" }}>
                     Team size
                   </p>
-                  <p
-                    style={{
-                      margin: "0",
-                      fontSize: "22px",
-                      fontFamily: "'DM Mono', monospace",
-                      fontWeight: "500",
-                      color: "#fff",
-                    }}
-                  >
-                    {form.teamSize}
-                    <span
-                      style={{
-                        fontSize: "13px",
-                        color: "rgba(255,255,255,0.35)",
-                        marginLeft: "4px",
-                      }}
-                    >
-                      people
-                    </span>
-                  </p>
+                  <strong style={{ fontSize: "24px" }}>{form.teamSize}</strong>
                 </div>
 
                 <div
                   style={{
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.07)",
-                    borderRadius: "12px",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "14px",
                     padding: "16px",
                   }}
                 >
-                  <p
-                    style={{
-                      margin: "0 0 6px",
-                      fontSize: "10px",
-                      fontFamily: "'DM Mono', monospace",
-                      color: "rgba(255,255,255,0.35)",
-                      letterSpacing: "0.1em",
-                      textTransform: "uppercase",
-                    }}
-                  >
+                  <p style={{ color: "rgba(255,255,255,0.4)", margin: "0 0 6px" }}>
                     Use case
                   </p>
-                  <p
+                  <strong style={{ textTransform: "capitalize" }}>
+                    {form.primaryUseCase}
+                  </strong>
+                </div>
+              </div>
+
+              <div>
+                {form.tools.map((tool) => (
+                  <div
+                    key={tool.id}
                     style={{
-                      margin: "0",
-                      fontSize: "15px",
-                      fontFamily: "'DM Sans', sans-serif",
-                      fontWeight: "600",
-                      color: "#fff",
-                      textTransform: "capitalize",
+                      background: "rgba(255,255,255,0.035)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: "12px",
+                      padding: "14px 16px",
+                      marginBottom: "8px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "12px",
                     }}
                   >
-                    {USE_CASES.find((u) => u.value === form.primaryUseCase)?.icon}{" "}
-                    {form.primaryUseCase}
-                  </p>
-                </div>
-              </div>
-
-              {/* Tools summary */}
-              <div>
-                <p
-                  style={{
-                    margin: "0 0 12px",
-                    fontSize: "10px",
-                    fontFamily: "'DM Mono', monospace",
-                    color: "rgba(255,255,255,0.35)",
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  Tools ({form.tools.length})
-                </p>
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: "8px" }}
-                >
-                  {form.tools.map((t) => (
-                    <div
-                      key={t.id}
-                      style={{
-                        background: "rgba(255,255,255,0.03)",
-                        border: "1px solid rgba(255,255,255,0.06)",
-                        borderRadius: "10px",
-                        padding: "12px 16px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "10px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: "7px",
-                            height: "7px",
-                            borderRadius: "50%",
-                            background: TOOL_COLORS[t.name],
-                            boxShadow: `0 0 6px ${TOOL_COLORS[t.name]}80`,
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span
-                          style={{
-                            fontSize: "13px",
-                            fontWeight: "500",
-                            color: "#fff",
-                          }}
-                        >
-                          {t.name}
-                        </span>
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            color: "rgba(255,255,255,0.3)",
-                            fontFamily: "'DM Mono', monospace",
-                          }}
-                        >
-                          {t.plan}
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "16px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "13px",
-                            fontFamily: "'DM Mono', monospace",
-                            color: "#6EE7B7",
-                          }}
-                        >
-                          ${parseFloat(t.monthlySpend || "0").toFixed(0)}/mo
-                        </span>
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            color: "rgba(255,255,255,0.3)",
-                            fontFamily: "'DM Mono', monospace",
-                          }}
-                        >
-                          {t.seats} seat{parseInt(t.seats) !== 1 ? "s" : ""}
-                        </span>
+                    <div>
+                      <strong>{tool.name}</strong>
+                      <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "13px" }}>
+                        {formatPlan(tool.plan)} · {tool.seats} seat
+                        {Number(tool.seats) !== 1 ? "s" : ""}
                       </div>
                     </div>
-                  ))}
-                </div>
+
+                    <strong style={{ color: "#6EE7B7" }}>
+                      ${Number(tool.monthlySpend || 0).toFixed(0)}/mo
+                    </strong>
+                  </div>
+                ))}
               </div>
 
-              {/* Total */}
               <div
                 style={{
-                  background: "linear-gradient(135deg, rgba(110,231,183,0.06) 0%, rgba(59,130,246,0.06) 100%)",
-                  border: "1px solid rgba(110,231,183,0.15)",
-                  borderRadius: "14px",
-                  padding: "20px 20px",
+                  background:
+                    "linear-gradient(135deg, rgba(110,231,183,0.08), rgba(59,130,246,0.08))",
+                  border: "1px solid rgba(110,231,183,0.18)",
+                  borderRadius: "16px",
+                  padding: "20px",
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
                 }}
               >
                 <div>
-                  <p
-                    style={{
-                      margin: "0 0 2px",
-                      fontSize: "10px",
-                      fontFamily: "'DM Mono', monospace",
-                      color: "rgba(255,255,255,0.35)",
-                      letterSpacing: "0.1em",
-                      textTransform: "uppercase",
-                    }}
-                  >
+                  <p style={{ color: "rgba(255,255,255,0.45)", margin: "0 0 4px" }}>
                     Total monthly spend
                   </p>
-                  <p
-                    style={{
-                      margin: "0",
-                      fontSize: "11px",
-                      fontFamily: "'DM Mono', monospace",
-                      color: "rgba(255,255,255,0.25)",
-                    }}
-                  >
+                  <p style={{ color: "rgba(255,255,255,0.28)", margin: 0 }}>
                     ${(totalMonthly * 12).toFixed(0)}/yr annualized
                   </p>
                 </div>
-                <span
-                  style={{
-                    fontSize: "28px",
-                    fontFamily: "'DM Mono', monospace",
-                    fontWeight: "500",
-                    color: "#6EE7B7",
-                  }}
-                >
+
+                <strong style={{ color: "#6EE7B7", fontSize: "28px" }}>
                   ${totalMonthly.toFixed(2)}
-                </span>
+                </strong>
               </div>
 
-              {errors.submit && (
-                <div
-                  style={{
-                    background: "rgba(239,68,68,0.08)",
-                    border: "1px solid rgba(239,68,68,0.2)",
-                    borderRadius: "10px",
-                    padding: "12px 16px",
-                  }}
-                >
-                  <p style={{ ...errorStyle, margin: "0" }}>{errors.submit}</p>
-                </div>
-              )}
+              {errors.submit && <p style={errorStyle}>{errors.submit}</p>}
             </div>
           )}
 
-          {/* Navigation */}
           <div
             style={{
+              marginTop: "32px",
+              paddingTop: "22px",
+              borderTop: "1px solid rgba(255,255,255,0.08)",
               display: "flex",
               justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "32px",
-              paddingTop: "24px",
-              borderTop: "1px solid rgba(255,255,255,0.05)",
             }}
           >
             {step > 0 ? (
@@ -1358,30 +941,15 @@ export default function AuditPage() {
                 type="button"
                 onClick={handleBack}
                 style={{
-                  background: "none",
+                  background: "rgba(255,255,255,0.05)",
                   border: "1px solid rgba(255,255,255,0.1)",
+                  color: "rgba(255,255,255,0.75)",
                   borderRadius: "10px",
-                  padding: "11px 20px",
-                  color: "rgba(255,255,255,0.5)",
-                  fontSize: "13px",
-                  fontFamily: "'DM Mono', monospace",
+                  padding: "12px 20px",
                   cursor: "pointer",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    "rgba(255,255,255,0.2)";
-                  (e.currentTarget as HTMLButtonElement).style.color =
-                    "rgba(255,255,255,0.8)";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    "rgba(255,255,255,0.1)";
-                  (e.currentTarget as HTMLButtonElement).style.color =
-                    "rgba(255,255,255,0.5)";
                 }}
               >
-                ← back
+                ← Back
               </button>
             ) : (
               <div />
@@ -1390,20 +958,15 @@ export default function AuditPage() {
             {step < 2 ? (
               <button
                 type="button"
-                className="next-btn"
                 onClick={handleNext}
                 style={{
-                  background: "linear-gradient(135deg, #6EE7B7 0%, #3B82F6 100%)",
+                  background: "linear-gradient(135deg, #6EE7B7, #3B82F6)",
+                  color: "#000",
                   border: "none",
                   borderRadius: "10px",
-                  padding: "12px 28px",
-                  color: "#000",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  fontFamily: "'DM Sans', sans-serif",
+                  padding: "12px 26px",
+                  fontWeight: 800,
                   cursor: "pointer",
-                  transition: "all 0.2s ease",
-                  letterSpacing: "-0.01em",
                 }}
               >
                 Continue →
@@ -1411,74 +974,52 @@ export default function AuditPage() {
             ) : (
               <button
                 type="button"
-                className="next-btn"
-                onClick={handleSubmit}
                 disabled={isSubmitting}
+                onClick={handleSubmit}
                 style={{
                   background: isSubmitting
-                    ? "rgba(110,231,183,0.4)"
-                    : "linear-gradient(135deg, #6EE7B7 0%, #3B82F6 100%)",
+                    ? "rgba(110,231,183,0.45)"
+                    : "linear-gradient(135deg, #6EE7B7, #3B82F6)",
+                  color: "#000",
                   border: "none",
                   borderRadius: "10px",
-                  padding: "12px 28px",
-                  color: "#000",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  fontFamily: "'DM Sans', sans-serif",
+                  padding: "12px 26px",
+                  fontWeight: 800,
                   cursor: isSubmitting ? "not-allowed" : "pointer",
-                  transition: "all 0.2s ease",
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
-                  letterSpacing: "-0.01em",
                 }}
               >
-                {isSubmitting ? (
-                  <>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: "14px",
-                        height: "14px",
-                        border: "2px solid rgba(0,0,0,0.3)",
-                        borderTopColor: "#000",
-                        borderRadius: "50%",
-                        animation: "spin 0.7s linear infinite",
-                      }}
-                    />
-                    Analyzing…
-                  </>
-                ) : (
-                  "Run audit →"
+                {isSubmitting && (
+                  <span
+                    style={{
+                      width: "14px",
+                      height: "14px",
+                      border: "2px solid rgba(0,0,0,0.3)",
+                      borderTopColor: "#000",
+                      borderRadius: "999px",
+                      animation: "spin 0.7s linear infinite",
+                    }}
+                  />
                 )}
+                {isSubmitting ? "Analyzing..." : "Run audit →"}
               </button>
             )}
           </div>
-        </div>
+        </section>
 
-        {/* Footer note */}
         <p
           style={{
             marginTop: "24px",
-            fontSize: "11px",
-            fontFamily: "'DM Mono', monospace",
-            color: "rgba(255,255,255,0.18)",
+            color: "rgba(255,255,255,0.22)",
+            fontSize: "12px",
             textAlign: "center",
           }}
         >
           Data stays in your browser. Nothing is sent to a server.
         </p>
-      </div>
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+      </main>
     </>
   );
 }
